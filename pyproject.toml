@@ -1,0 +1,68 @@
+[project]
+name = "gaffer"
+version = "0.0.1"
+description = "Home Assistant integration that checks whether automations had the expected result."
+requires-python = ">=3.14.2"
+license = "MIT"
+
+[dependency-groups]
+dev = [
+    "ruff==0.17.3",
+    "mypy==2.4.1",
+]
+# One group per supported Home Assistant release. Each pins the test plugin
+# that pins that exact homeassistant version.
+minimum = ["pytest-homeassistant-custom-component==0.13.371"] # HA 2026.10.0
+current = ["pytest-homeassistant-custom-component==0.13.375"] # HA 2026.10.4
+
+[tool.uv]
+package = false
+default-groups = ["dev", "current"]
+conflicts = [[{ group = "minimum" }, { group = "current" }]]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F",  # pycodestyle, pyflakes
+    "I",            # import order
+    "B",            # bugbear
+    "UP",           # pyupgrade
+    "S",            # bandit security checks
+    "SIM",          # simplifications
+    "RUF",
+    "ERA",          # commented-out code
+    "PTH",          # pathlib over os.path
+    "ASYNC",
+    "D",            # docstrings
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.per-file-ignores]
+# Asserts are how pytest checks results; test names are their documentation.
+"tests/**" = ["S101", "D"]
+
+[tool.mypy]
+strict = true
+# custom_components/ is a namespace package, as Home Assistant loads it.
+explicit_package_bases = true
+mypy_path = "."
+files = ["custom_components", "tests"]
+
+[[tool.mypy.overrides]]
+# The test plugin ships no type information.
+module = ["pytest_homeassistant_custom_component.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--strict-markers --cov=custom_components.gaffer --cov-branch --cov-report=term-missing"
+
+[tool.coverage.report]
+fail_under = 100

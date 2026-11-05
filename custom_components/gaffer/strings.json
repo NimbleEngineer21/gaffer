@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Gaffer",
+        "description": "Gaffer checks that automations, scripts, scenes, and HomeKit Bridge commands have the expected result on your devices. It does not change automations or devices."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Gaffer is already set up."
+    }
+  }
+}

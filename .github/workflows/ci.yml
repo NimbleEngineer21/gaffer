@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and types
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # read this checkout only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.4"
+          enable-cache: false
+      - run: uv sync --locked
+      - run: uv run --locked ruff check
+      - run: uv run --locked ruff format --check
+      - run: uv run --locked mypy
+
+  test:
+    name: Tests HA ${{ matrix.ha }} (${{ matrix.profile }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read # read this checkout only
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: minimum
+            ha: "2026.10.0"
+          - profile: current
+            ha: "2026.10.4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.4"
+          enable-cache: false
+      - name: Install the pinned Home Assistant profile
+        env:
+          HA_PROFILE: ${{ matrix.profile }}
+        run: uv sync --locked --no-default-groups --group "$HA_PROFILE"
+      - name: Confirm the installed Home Assistant version
+        env:
+          HA_PROFILE: ${{ matrix.profile }}
+          EXPECTED_HA: ${{ matrix.ha }}
+        run: >-
+          test "$(uv run --locked --no-default-groups --group "$HA_PROFILE"
+          python -c 'from homeassistant.const import __version__; print(__version__)')"
+          = "$EXPECTED_HA"
+      - name: Run tests
+        env:
+          HA_PROFILE: ${{ matrix.profile }}
+        run: uv run --locked --no-default-groups --group "$HA_PROFILE" pytest
+
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # validate this checkout only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate integration metadata
+        run: >-
+          docker run --rm --volume "$PWD:/github/workspace:ro"
+          ghcr.io/home-assistant/hassfest@sha256:a6a695921327230c07ba89ebbb48778737bc1dda30b00cb60c9276585687fc6d
+
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # the action reads repository metadata
+    steps:
+      - uses: hacs/action@d556e736723344f83838d08488c983a15381059a # 22.5.0
+        with:
+          category: integration
