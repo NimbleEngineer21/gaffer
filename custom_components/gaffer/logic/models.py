@@ -5,6 +5,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
 
+# Service data keys that set an attribute of a different name.
+_ATTRIBUTE_FOR_KEY = {"brightness_pct": "brightness"}
+
 
 class Origin(StrEnum):
     """What started a run."""
@@ -31,25 +34,38 @@ class Ctx:
 
 
 @dataclass(frozen=True, slots=True)
+class Snapshot:
+    """The state and attributes of one entity at one time."""
+
+    state: str | None
+    attributes: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class ServiceCall:
-    """One action that the run asked for."""
+    """One action that the run asked for, with each target's state before it ran."""
 
     domain: str
     service: str
     data: Mapping[str, Any]
     entity_ids: tuple[str, ...]
     at: float
+    prior: Mapping[str, Snapshot] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class StateChange:
-    """One state change on a target entity."""
+    """One state change on a target entity.
+
+    matched_by is "context" or "window" for a change that this run caused, and
+    "foreign" for a change that another run or a user made on the same entity.
+    """
 
     entity_id: str
     state: str | None
     attributes: Mapping[str, Any]
     at: float
-    matched_by: Literal["context", "window"]
+    matched_by: Literal["context", "window", "foreign"]
 
 
 @dataclass(slots=True)
@@ -71,7 +87,11 @@ class RunRecord:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for storage, keeping only attributes that a call set."""
-        keys = {key for call in self.calls for key in call.data}
+        keys = {_ATTRIBUTE_FOR_KEY.get(k, k) for call in self.calls for k in call.data}
+
+        def kept(attributes: Mapping[str, Any]) -> dict[str, Any]:
+            return {k: v for k, v in attributes.items() if k in keys}
+
         return {
             "context_id": self.context_id,
             "origin": self.origin.value,
@@ -84,6 +104,10 @@ class RunRecord:
                     "data": dict(c.data),
                     "entity_ids": list(c.entity_ids),
                     "at": c.at,
+                    "prior": {
+                        entity_id: {"state": snap.state, "attributes": kept(snap.attributes)}
+                        for entity_id, snap in c.prior.items()
+                    },
                 }
                 for c in self.calls
             ],
@@ -91,10 +115,104 @@ class RunRecord:
                 {
                     "entity_id": s.entity_id,
                     "state": s.state,
-                    "attributes": {k: v for k, v in s.attributes.items() if k in keys},
+                    "attributes": kept(s.attributes),
                     "at": s.at,
                     "matched_by": s.matched_by,
                 }
                 for s in self.changes
             ],
+        }
+
+
+class Verdict(StrEnum):
+    """The result of one expectation, plan section 4.5."""
+
+    CONFIRMED = "confirmed"
+    LATE = "late"
+    NO_EFFECT = "no_effect"
+    REVERTED = "reverted"
+    PARTIAL = "partial"
+    TARGET_UNAVAILABLE = "target_unavailable"
+    UNCHECKED = "unchecked"
+    SUPERSEDED = "superseded"
+
+
+FAILURES = frozenset(
+    {Verdict.NO_EFFECT, Verdict.REVERTED, Verdict.PARTIAL, Verdict.TARGET_UNAVAILABLE}
+)
+
+
+class Comparator(StrEnum):
+    """How an observed value is compared with the expected value."""
+
+    EQ = "eq"
+    APPROX = "approx"
+    IN = "in"
+    NOT_IN = "not_in"
+
+
+STATE = "state"
+
+
+@dataclass(frozen=True, slots=True)
+class Check:
+    """One expected value: the state (key "state") or one attribute."""
+
+    key: str
+    comparator: Comparator
+    value: Any
+    tolerance: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for storage."""
+        value = list(self.value) if isinstance(self.value, tuple) else self.value
+        return {
+            "key": self.key,
+            "comparator": self.comparator.value,
+            "value": value,
+            "tolerance": self.tolerance,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Expectation:
+    """What one call should do to one entity.
+
+    No checks means the call is unchecked. entity_id is None only for an
+    unchecked call that has no target, such as notify.
+    """
+
+    entity_id: str | None
+    call_index: int
+    checks: tuple[Check, ...]
+    window: float
+
+    @property
+    def keys(self) -> set[str]:
+        """The state and attribute names that this expectation sets."""
+        return {check.key for check in self.checks}
+
+
+@dataclass(frozen=True, slots=True)
+class ActionResult:
+    """The verdict on one expectation, with the values seen at each check."""
+
+    expectation: Expectation
+    verdict: Verdict
+    at_action: Mapping[str, Any] = field(default_factory=dict)
+    at_run: Mapping[str, Any] = field(default_factory=dict)
+    failed: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for storage."""
+        exp = self.expectation
+        return {
+            "entity_id": exp.entity_id,
+            "call_index": exp.call_index,
+            "window": exp.window,
+            "checks": [check.to_dict() for check in exp.checks],
+            "verdict": self.verdict.value,
+            "at_action": dict(self.at_action),
+            "at_run": dict(self.at_run),
+            "failed": list(self.failed),
         }

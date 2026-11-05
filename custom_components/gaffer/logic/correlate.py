@@ -6,6 +6,7 @@ Rules (confirmed in the M0 spike on Home Assistant 2026.11):
 - An entity keeps that context for 5 s only. A later state write has a fresh
   context with no parent and no user. Such a change is matched to the newest open
   run that targeted the entity, if it falls inside that entity's settle window.
+- Any other change on a target of an open run is "foreign" to that run.
 """
 
 from collections.abc import Callable
@@ -50,17 +51,29 @@ class RunTracker:
         run.last_activity = call.at
 
     def on_state(self, ctx: Ctx, change: StateChange) -> None:
-        """Add a state change by context, or by window for a device report."""
+        """Add a state change to the run that caused it, and to other runs as foreign.
+
+        A change that carries a run's context belongs to that run. A device report
+        (fresh context) joins the newest open run that targeted the entity inside its
+        window. Any other change on a target of an open run was made by another run
+        or a user; it is added to each such run as "foreign", so a verdict can say
+        the action was superseded.
+        """
         if not self._open:
             return
-        run = self._open.get(ctx.id)
-        if run is not None:
-            if change.entity_id in run.targets:
-                run.changes.append(change)
-                run.last_activity = max(run.last_activity, change.at)
+        owner = self._open.get(ctx.id)
+        if owner is None and ctx.is_device_report:
+            self._match_by_window(change)
             return
-        if not ctx.is_device_report:
-            return
+        if owner is not None and change.entity_id in owner.targets:
+            owner.changes.append(change)
+            owner.last_activity = max(owner.last_activity, change.at)
+        foreign = replace(change, matched_by="foreign")
+        for run in self._open.values():
+            if run is not owner and change.entity_id in run.targets:
+                run.changes.append(foreign)
+
+    def _match_by_window(self, change: StateChange) -> None:
         window = self._window_for(change.entity_id)
         for run in reversed(self._open.values()):
             last_call = max(
