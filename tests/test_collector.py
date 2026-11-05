@@ -31,6 +31,7 @@ async def _automation(hass: HomeAssistant, actions: list[dict[str, Any]]) -> Non
         ]
     }
     assert await async_setup_component(hass, "automation", config)
+    await hass.async_block_till_done()
 
 
 def _turn_on(target: dict[str, Any]) -> dict[str, Any]:
@@ -80,6 +81,8 @@ async def test_scene_run(
 ) -> None:
     scene = {"scene": [{"name": "sc", "entities": {A: "on"}}]}
     assert await async_setup_component(hass, "scene", scene)
+    # Platform entities are added after setup returns; wait for scene.sc to exist.
+    await hass.async_block_till_done()
     await hass.services.async_call("scene", "turn_on", {"entity_id": "scene.sc"}, blocking=True)
     [run] = await _runs(hass, loaded_entry, freezer)
     assert run["origin"] == "scene"
