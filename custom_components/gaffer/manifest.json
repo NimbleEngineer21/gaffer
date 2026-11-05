@@ -1,0 +1,14 @@
+{
+  "domain": "gaffer",
+  "name": "Gaffer",
+  "codeowners": ["@NimbleEngineer21"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/NimbleEngineer21/gaffer",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/NimbleEngineer21/gaffer/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.0.1"
+}
