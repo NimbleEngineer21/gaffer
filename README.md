@@ -17,6 +17,25 @@ it never changes an automation or a device.
 
 Gaffer is not affiliated with Home Assistant or the Open Home Foundation.
 
+## What Gaffer reports
+
+Gaffer reports a run when its worst action result is a failure: `no_effect`,
+`reverted`, `partial`, or `target_unavailable`.
+
+- **`gaffer_result` event.** Fired once for each failed run. Use it as an
+  automation trigger.
+- **`sensor.gaffer_failures_24h`.** The number of failed runs in the last 24 hours.
+  Its `failures` attribute lists the last 10. The recorder does not store that
+  attribute.
+- **Repairs.** An automation, script, or scene that fails 3 or more times in 24
+  hours gets a Repairs issue. The issue clears when the next 3 runs have no
+  failure, or after 24 hours with no failure. Only administrators see Repairs.
+- **WebSocket API (administrators only).** `gaffer/runs` lists run summaries.
+  `gaffer/run` returns one stored run by `context_id`.
+
+The diagnostics download contains entity ids and states from recent runs. Read it
+before you post it in public.
+
 ## Development
 
 You need [uv](https://docs.astral.sh/uv/) 0.13.4 or newer.

@@ -9,5 +9,23 @@
     "abort": {
       "single_instance_allowed": "Gaffer is already set up."
     }
+  },
+  "entity": {
+    "sensor": {
+      "failures_24h": {
+        "name": "Failures 24h",
+        "state_attributes": {
+          "failures": {
+            "name": "Failures"
+          }
+        }
+      }
+    }
+  },
+  "issues": {
+    "runtime_failure": {
+      "title": "{name} does not have the expected result",
+      "description": "{name} ran and did not have the expected result {count} times in the last 24 hours.\n\nFailed entities and verdicts: {failures}.\n\nGaffer does not change automations. Open the automation trace to find the cause. This issue clears when the next 3 runs have no failure, or after 24 hours with no failure."
+    }
   }
 }
