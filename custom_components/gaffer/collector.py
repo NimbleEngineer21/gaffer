@@ -33,10 +33,19 @@ def _ctx(context: Context) -> Ctx:
 class Collector:
     """Owns the run tracker for one loaded config entry."""
 
-    def __init__(self, hass: HomeAssistant, store: GafferStore) -> None:
-        """Bind to Home Assistant and the store. Call async_start to listen."""
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        store: GafferStore,
+        on_stored: Callable[[list[dict[str, Any]]], None] | None = None,
+    ) -> None:
+        """Bind to Home Assistant and the store. Call async_start to listen.
+
+        on_stored gets the records of each batch of judged runs after they are stored.
+        """
         self._hass = hass
         self._store = store
+        self._on_stored = on_stored
         self.tracker = RunTracker(settle_window)
         self._unsubs: list[CALLBACK_TYPE] = []
 
@@ -108,9 +117,12 @@ class Collector:
     def _keep(self, closed: list[RunRecord], *, judged: bool = True) -> None:
         if not closed:
             return
-        runs = self._store.data["runs"] + [self._record(run, judged=judged) for run in closed]
+        records = [self._record(run, judged=judged) for run in closed]
+        runs = self._store.data["runs"] + records
         self._store.data["runs"] = retain(runs, dt_util.utcnow().timestamp())
         self._store.async_schedule_save()
+        if judged and self._on_stored is not None:
+            self._on_stored(records)
 
     @staticmethod
     def _record(run: RunRecord, *, judged: bool) -> dict[str, Any]:
