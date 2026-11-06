@@ -132,7 +132,11 @@ async def test_area_and_all_targets_resolve_to_entities(
     hass: HomeAssistant, loaded_entry: MockConfigEntry, freezer: FrozenDateTimeFactory
 ) -> None:
     area = ar.async_get(hass).async_create("Den")
-    er.async_get(hass).async_update_entity(A, area_id=area.id)
+    registry = er.async_get(hass)
+    registry.async_update_entity(A, area_id=area.id)
+    # A sensor in the same area: an input_boolean action does not act on it.
+    sensor = registry.async_get_or_create("sensor", "test", "den_temp")
+    registry.async_update_entity(sensor.entity_id, area_id=area.id)
     await _automation(hass, [_turn_on({"area_id": area.id}), _turn_on({"entity_id": "all"})])
     hass.bus.async_fire("go")
     [run] = await _runs(hass, loaded_entry, freezer)
@@ -154,7 +158,10 @@ async def test_unload_stores_open_runs(hass: HomeAssistant, loaded_entry: MockCo
     await hass.async_block_till_done()
     store = loaded_entry.runtime_data.store
     assert await hass.config_entries.async_unload(loaded_entry.entry_id)
-    assert [r["source"] for r in store.data["runs"]] == ["automation.t1"]
+    [run] = store.data["runs"]
+    assert run["source"] == "automation.t1"
+    # Its settle window did not pass, so it has no verdict.
+    assert (run["judged"], run["results"], run["verdict"]) == (False, [], None)
 
 
 async def test_removed_entity_change_records_no_state(
@@ -167,3 +174,46 @@ async def test_removed_entity_change_records_no_state(
     hass.states.async_remove("light.gone", context=Context())
     [run] = await _runs(hass, loaded_entry, freezer)
     assert [(s["state"], s["attributes"]) for s in run["changes"]] == [(None, {})]
+
+
+async def test_closed_run_stores_prior_state_and_verdicts(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, freezer: FrozenDateTimeFactory
+) -> None:
+    await _automation(hass, [_turn_on({"entity_id": A})])
+    hass.bus.async_fire("go")
+    [run] = await _runs(hass, loaded_entry, freezer)
+    assert run["calls"][0]["prior"] == {A: {"state": "off", "attributes": {}}}
+    assert [(r["entity_id"], r["verdict"]) for r in run["results"]] == [(A, "confirmed")]
+    assert (run["judged"], run["verdict"]) == (True, "confirmed")
+
+
+async def test_already_on_entity_is_confirmed(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, freezer: FrozenDateTimeFactory
+) -> None:
+    await hass.services.async_call("input_boolean", "turn_on", {"entity_id": A}, blocking=True)
+    await _automation(hass, [_turn_on({"entity_id": A})])
+    hass.bus.async_fire("go")
+    [run] = await _runs(hass, loaded_entry, freezer)
+    assert run["changes"] == []
+    assert run["verdict"] == "confirmed"
+
+
+async def test_entity_that_ignores_the_call_is_no_effect(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, freezer: FrozenDateTimeFactory
+) -> None:
+    # A state with no light entity behind it: the call changes nothing.
+    hass.states.async_set("light.stuck", "off")
+    await _automation(hass, [{"action": "light.turn_on", "target": {"entity_id": "light.stuck"}}])
+    hass.bus.async_fire("go")
+    [run] = await _runs(hass, loaded_entry, freezer)
+    assert [r["verdict"] for r in run["results"]] == ["no_effect"]
+
+
+async def test_run_with_only_a_container_call_has_no_verdict(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, freezer: FrozenDateTimeFactory
+) -> None:
+    assert await async_setup_component(hass, "script", {"script": {"empty": {"sequence": []}}})
+    await _automation(hass, [{"action": "script.empty"}])
+    hass.bus.async_fire("go")
+    [run] = await _runs(hass, loaded_entry, freezer)
+    assert (run["judged"], run["results"], run["verdict"]) == (True, [], None)

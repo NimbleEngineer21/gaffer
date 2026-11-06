@@ -6,12 +6,14 @@ Rules (confirmed in the M0 spike on Home Assistant 2026.11):
 - An entity keeps that context for 5 s only. A later state write has a fresh
   context with no parent and no user. Such a change is matched to the newest open
   run that targeted the entity, if it falls inside that entity's settle window.
+- Any other change on a target of an open run is "foreign" to that run.
 """
 
 from collections.abc import Callable
 from dataclasses import replace
 
 from .models import Ctx, Origin, RunRecord, ServiceCall, StateChange
+from .windows import call_window
 
 WindowFor = Callable[[str], float]
 
@@ -50,36 +52,51 @@ class RunTracker:
         run.last_activity = call.at
 
     def on_state(self, ctx: Ctx, change: StateChange) -> None:
-        """Add a state change by context, or by window for a device report."""
+        """Add a state change to the run that caused it, and to other runs as foreign.
+
+        A change that carries a run's context belongs to that run. A device report
+        (fresh context) joins the newest open run that targeted the entity inside its
+        window. Any other change on a target of an open run was made by another run
+        or a user; it is added to each such run as "foreign", so a verdict can say
+        the action was superseded.
+        """
         if not self._open:
             return
-        run = self._open.get(ctx.id)
-        if run is not None:
-            if change.entity_id in run.targets:
-                run.changes.append(change)
-                run.last_activity = max(run.last_activity, change.at)
+        owner = self._open.get(ctx.id)
+        if owner is None and ctx.is_device_report:
+            self._match_by_window(change)
             return
-        if not ctx.is_device_report:
-            return
-        window = self._window_for(change.entity_id)
+        if owner is not None and change.entity_id in owner.targets:
+            owner.changes.append(change)
+            owner.last_activity = max(owner.last_activity, change.at)
+        foreign = replace(change, matched_by="foreign")
+        for run in self._open.values():
+            if run is not owner and change.entity_id in run.targets:
+                run.changes.append(foreign)
+
+    def _match_by_window(self, change: StateChange) -> None:
+        entity_id = change.entity_id
         for run in reversed(self._open.values()):
-            last_call = max(
-                (c.at for c in run.calls if change.entity_id in c.entity_ids), default=None
-            )
-            if last_call is not None and change.at - last_call <= window:
+            last = next((c for c in reversed(run.calls) if entity_id in c.entity_ids), None)
+            if last is not None and change.at - last.at <= call_window(
+                last, entity_id, self._window_for
+            ):
                 run.changes.append(replace(change, matched_by="window"))
                 run.last_activity = max(run.last_activity, change.at)
                 return
 
     def close_expired(self, now: float) -> list[RunRecord]:
-        """Remove and return runs whose longest target window has passed."""
+        """Remove and return runs whose longest call window has passed."""
         closed = [run for run in self._open.values() if now - run.last_activity > self._span(run)]
         for run in closed:
             del self._open[run.context_id]
         return closed
 
     def _span(self, run: RunRecord) -> float:
-        return max((self._window_for(e) for e in run.targets), default=0.0)
+        return max(
+            (call_window(c, e, self._window_for) for c in run.calls for e in c.entity_ids),
+            default=0.0,
+        )
 
     def _root_origin(self, ctx: Ctx, call: ServiceCall) -> Origin | None:
         if ctx.parent_id is not None:

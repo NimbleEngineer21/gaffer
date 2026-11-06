@@ -1,5 +1,7 @@
 """Grouping calls and state changes into runs."""
 
+from typing import Any
+
 from custom_components.gaffer.logic.correlate import RunTracker
 from custom_components.gaffer.logic.models import Ctx, Origin, ServiceCall, StateChange
 
@@ -10,8 +12,10 @@ def _tracker(*, track_user: bool = False) -> RunTracker:
     return RunTracker(lambda entity_id: 3.0, track_user=track_user)
 
 
-def _call(entity: str, at: float, domain: str = "light", service: str = "turn_on") -> ServiceCall:
-    return ServiceCall(domain, service, {"entity_id": entity}, (entity,), at)
+def _call(
+    entity: str, at: float, domain: str = "light", service: str = "turn_on", **data: Any
+) -> ServiceCall:
+    return ServiceCall(domain, service, {"entity_id": entity, **data}, (entity,), at)
 
 
 def _change(entity: str, at: float) -> StateChange:
@@ -63,14 +67,40 @@ def test_window_match_prefers_newest_run() -> None:
     assert [len(r.changes) for r in t.open_runs] == [0, 1]
 
 
-def test_changes_with_a_cause_never_match_by_window() -> None:
+def test_changes_with_a_cause_are_foreign_not_window_matches() -> None:
     t = _tracker()
     t.start(AUTO, Origin.AUTOMATION, None, 0.0)
     t.on_call(AUTO, _call("light.x", 0.0))
     t.on_state(Ctx("other", parent_id="p"), _change("light.x", 1.0))
-    t.on_state(Ctx("ui", user_id="u"), _change("light.x", 1.0))
+    t.on_state(Ctx("ui", user_id="u"), _change("light.x", 1.5))
     t.on_state(Ctx("fresh"), _change("light.y", 1.0))
-    assert t.open_runs[0].changes == []
+    [run] = t.open_runs
+    assert [(c.at, c.matched_by) for c in run.changes] == [(1.0, "foreign"), (1.5, "foreign")]
+    # A foreign change does not keep the run open.
+    assert run.last_activity == 0.0
+
+
+def test_change_by_one_run_is_foreign_to_another_run_on_the_same_entity() -> None:
+    t = _tracker()
+    other = Ctx("run2", parent_id="trigger2")
+    t.start(AUTO, Origin.AUTOMATION, None, 0.0)
+    t.on_call(AUTO, _call("light.x", 0.0))
+    t.start(other, Origin.AUTOMATION, None, 1.0)
+    t.on_call(other, _call("light.x", 1.0))
+    t.on_state(other, _change("light.x", 1.1))
+    first, second = t.open_runs
+    assert [c.matched_by for c in first.changes] == ["foreign"]
+    assert [c.matched_by for c in second.changes] == ["context"]
+
+
+def test_own_change_on_untargeted_entity_is_not_foreign_elsewhere() -> None:
+    t = _tracker()
+    other = Ctx("run2", parent_id="trigger2")
+    t.start(AUTO, Origin.AUTOMATION, None, 0.0)
+    t.on_call(AUTO, _call("light.x", 0.0))
+    t.start(other, Origin.AUTOMATION, None, 0.0)
+    t.on_state(other, _change("light.y", 0.5))
+    assert [r.changes for r in t.open_runs] == [[], []]
 
 
 def test_state_change_with_no_open_runs_is_ignored() -> None:
@@ -122,3 +152,14 @@ def test_run_without_targets_closes_at_once() -> None:
     t = _tracker()
     t.start(AUTO, Origin.AUTOMATION, None, 0.0)
     assert len(t.close_expired(0.1)) == 1
+
+
+def test_transition_extends_the_window_match_and_the_close_time() -> None:
+    t = _tracker()
+    t.start(AUTO, Origin.AUTOMATION, None, 0.0)
+    t.on_call(AUTO, _call("light.x", 0.0, transition=10))
+    t.on_state(Ctx("fresh"), _change("light.x", 12.0))
+    # The span is 3 + 10 s from the last activity at 12 s.
+    assert t.close_expired(24.0) == []
+    [run] = t.close_expired(25.5)
+    assert [c.matched_by for c in run.changes] == ["window"]

@@ -11,8 +11,10 @@ from homeassistant.helpers.target import TargetSelection, async_extract_referenc
 from homeassistant.util import dt as dt_util
 
 from .logic.correlate import RunTracker
-from .logic.models import Ctx, Origin, RunRecord, ServiceCall, StateChange
+from .logic.expectations import own_targets
+from .logic.models import Ctx, Origin, RunRecord, ServiceCall, Snapshot, StateChange
 from .logic.retention import retain
+from .logic.verdict import judge, worst
 from .logic.windows import settle_window
 from .store import GafferStore
 
@@ -53,11 +55,15 @@ class Collector:
 
     @callback
     def async_stop(self) -> None:
-        """Unsubscribe, and store every open run as it is."""
+        """Unsubscribe, and store every open run as it is.
+
+        These runs stopped before their settle windows passed, so they are stored
+        without verdicts. Judging them now would report false failures.
+        """
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
-        self._keep(self.tracker.close_expired(float("inf")))
+        self._keep(self.tracker.close_expired(float("inf")), judged=False)
 
     def _starter(self, origin: Origin) -> Callable[[Event[Any]], None]:
         @callback
@@ -72,12 +78,14 @@ class Collector:
     def _on_call(self, event: Event[Any]) -> None:
         domain: str = event.data["domain"]
         data: dict[str, Any] = dict(event.data.get("service_data") or {})
+        entity_ids = self._resolve(domain, data)
         call = ServiceCall(
             domain,
             event.data["service"],
             data,
-            self._resolve(domain, data),
+            entity_ids,
             event.time_fired_timestamp,
+            self._prior(entity_ids),
         )
         self.tracker.on_call(_ctx(event.context), call)
 
@@ -97,12 +105,40 @@ class Collector:
     def _on_tick(self, now: datetime) -> None:
         self._keep(self.tracker.close_expired(now.timestamp()))
 
-    def _keep(self, closed: list[RunRecord]) -> None:
+    def _keep(self, closed: list[RunRecord], *, judged: bool = True) -> None:
         if not closed:
             return
-        runs = self._store.data["runs"] + [run.to_dict() for run in closed]
+        runs = self._store.data["runs"] + [self._record(run, judged=judged) for run in closed]
         self._store.data["runs"] = retain(runs, dt_util.utcnow().timestamp())
         self._store.async_schedule_save()
+
+    @staticmethod
+    def _record(run: RunRecord, *, judged: bool) -> dict[str, Any]:
+        """Serialize a closed run with the verdict on each of its actions.
+
+        "judged" tells a run with no expectations (verdict None) from a run that
+        was stored before its windows passed (also verdict None).
+        """
+        results = judge(run, settle_window) if judged else []
+        verdict = worst(results)
+        return run.to_dict() | {
+            "judged": judged,
+            "results": [result.to_dict() for result in results],
+            "verdict": None if verdict is None else verdict.value,
+        }
+
+    def _prior(self, entity_ids: tuple[str, ...]) -> dict[str, Snapshot]:
+        """Read each target's state as the call starts.
+
+        The call_service event fires before the service handler runs, so this is
+        the state before the action. An entity with no state is left out.
+        """
+        prior: dict[str, Snapshot] = {}
+        for entity_id in entity_ids:
+            state = self._hass.states.get(entity_id)
+            if state is not None:
+                prior[entity_id] = Snapshot(state.state, dict(state.attributes))
+        return prior
 
     def _resolve(self, domain: str, data: dict[str, Any]) -> tuple[str, ...]:
         """Expand entity, device, area, floor, and label targets to entity ids."""
@@ -112,4 +148,6 @@ class Collector:
         if not selection.has_any_target:
             return ()
         selected = async_extract_referenced_entity_ids(self._hass, selection)
-        return tuple(sorted(selected.referenced | selected.indirectly_referenced))
+        return own_targets(
+            domain, tuple(sorted(selected.referenced | selected.indirectly_referenced))
+        )
