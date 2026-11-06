@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .models import STATE, Check, Comparator, Expectation, RunRecord, ServiceCall
+from .windows import call_window
 
 WindowFor = Callable[[str], float]
 Rule = Callable[[ServiceCall, str], tuple[Check, ...]]
@@ -106,7 +107,7 @@ RULES: Mapping[tuple[str, str], Rule] = {
     ("media_player", "volume_set"): _volume,
     ("media_player", "media_play"): _fixed(_state("playing")),
     ("media_player", "play_media"): _fixed(_state("playing")),
-    ("media_player", "turn_on"): _fixed(Check(STATE, Comparator.NOT_IN, ("off",))),
+    ("media_player", "turn_on"): _fixed(Check(STATE, Comparator.NOT_IN, ("off", *UNAVAILABLE))),
     ("media_player", "turn_off"): _fixed(_state("off")),
     ("cover", "open_cover"): _fixed(Check(STATE, Comparator.IN, ("opening", "open"))),
     ("cover", "close_cover"): _fixed(Check(STATE, Comparator.IN, ("closing", "closed"))),
@@ -114,6 +115,19 @@ RULES: Mapping[tuple[str, str], Rule] = {
     ("lock", "lock"): _fixed(_state("locked")),
     ("lock", "unlock"): _fixed(_state("unlocked")),
 }
+
+
+def own_targets(domain: str, entity_ids: tuple[str, ...]) -> tuple[str, ...]:
+    """Keep the targets that a call can act on.
+
+    An area, device, floor, or label target expands to entities of every domain.
+    Home Assistant runs a domain's action only on that domain's entities, so a
+    light action on an area does not touch the sensor in it. The homeassistant
+    domain acts on any domain.
+    """
+    if domain == "homeassistant":
+        return entity_ids
+    return tuple(e for e in entity_ids if e.partition(".")[0] == domain)
 
 
 def is_container(call: ServiceCall) -> bool:
@@ -130,7 +144,10 @@ def infer(call: ServiceCall, index: int, window_for: WindowFor) -> list[Expectat
     rule = RULES.get((call.domain, call.service))
     return [
         Expectation(
-            entity_id, index, () if rule is None else rule(call, entity_id), window_for(entity_id)
+            entity_id,
+            index,
+            () if rule is None else rule(call, entity_id),
+            call_window(call, entity_id, window_for),
         )
         for entity_id in call.entity_ids
     ]

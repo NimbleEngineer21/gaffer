@@ -261,3 +261,24 @@ def test_result_to_dict() -> None:
         "at_run": {"state": "on", "rgb_color": (1, 2, 3)},
         "failed": [],
     }
+
+
+def test_report_at_the_end_of_a_transition_is_confirmed() -> None:
+    run = (
+        Run()
+        .call("turn_on", 0.0, OFF, transition=10, brightness=200)
+        .change(11.0, "on", how="window", brightness=200)
+    )
+    assert run.verdicts() == [Verdict.CONFIRMED]
+
+
+def test_run_check_waits_for_a_transition_on_a_later_call() -> None:
+    run = (
+        Run()
+        .call("volume_set", 0.0, IDLE, entity=M, volume_level=0.3)
+        .call("media_play", 1.0, IDLE, entity=M, transition=20)
+        .change(1.5, "idle", entity=M, volume_level=0.3)
+        .change(25.0, "playing", entity=M, volume_level=0.5)
+    )
+    # The run check for volume_set is at 1 + 20 + 10 s, after the volume reverted.
+    assert run.verdicts() == [Verdict.REVERTED, Verdict.CONFIRMED]

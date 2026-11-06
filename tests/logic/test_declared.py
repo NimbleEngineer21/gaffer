@@ -53,7 +53,9 @@ def _check(**over: Any) -> dict[str, Any]:
         (_check(comparator="gt"), "unknown comparator 'gt'"),
         (_check(comparator="in"), "non-empty list for in"),
         (_check(comparator="not_in", value=[]), "non-empty list for not_in"),
-        (_check(comparator="approx"), "value must be a number"),
+        (_check(comparator="approx"), "approx needs an attribute key"),
+        (_check(key="brightness", comparator="approx"), "'brightness' value must be a number"),
+        (_check(key="brightness", comparator="approx", value=True), "value must be a number"),
         (_check(tolerance="1"), "tolerance must be a number"),
         (_check(tolerance=True), "tolerance must be a number"),
         (_check(tolerance=-1), "tolerance must be zero or more"),
@@ -100,3 +102,12 @@ def test_declared_turns_an_unchecked_call_into_a_checked_one() -> None:
 def test_declared_for_an_untargeted_entity_is_ignored() -> None:
     inferred = [Expectation("light.a", 0, (ON,), 3.0)]
     assert merge(inferred, [DeclaredExpectation("light.z", (OFF,))]) == inferred
+
+
+def test_parse_accepts_a_negative_approx_value() -> None:
+    raw = {
+        "entity_id": "climate.freezer",
+        "checks": [{"key": "temperature", "comparator": "approx", "value": -18, "tolerance": 1}],
+    }
+    [check] = parse(raw).checks
+    assert check == Check("temperature", Comparator.APPROX, -18, 1.0)

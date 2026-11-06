@@ -11,6 +11,7 @@ from homeassistant.helpers.target import TargetSelection, async_extract_referenc
 from homeassistant.util import dt as dt_util
 
 from .logic.correlate import RunTracker
+from .logic.expectations import own_targets
 from .logic.models import Ctx, Origin, RunRecord, ServiceCall, Snapshot, StateChange
 from .logic.retention import retain
 from .logic.verdict import judge, worst
@@ -113,10 +114,15 @@ class Collector:
 
     @staticmethod
     def _record(run: RunRecord, *, judged: bool) -> dict[str, Any]:
-        """Serialize a closed run with the verdict on each of its actions."""
+        """Serialize a closed run with the verdict on each of its actions.
+
+        "judged" tells a run with no expectations (verdict None) from a run that
+        was stored before its windows passed (also verdict None).
+        """
         results = judge(run, settle_window) if judged else []
         verdict = worst(results)
         return run.to_dict() | {
+            "judged": judged,
             "results": [result.to_dict() for result in results],
             "verdict": None if verdict is None else verdict.value,
         }
@@ -142,4 +148,6 @@ class Collector:
         if not selection.has_any_target:
             return ()
         selected = async_extract_referenced_entity_ids(self._hass, selection)
-        return tuple(sorted(selected.referenced | selected.indirectly_referenced))
+        return own_targets(
+            domain, tuple(sorted(selected.referenced | selected.indirectly_referenced))
+        )

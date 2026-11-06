@@ -132,7 +132,11 @@ async def test_area_and_all_targets_resolve_to_entities(
     hass: HomeAssistant, loaded_entry: MockConfigEntry, freezer: FrozenDateTimeFactory
 ) -> None:
     area = ar.async_get(hass).async_create("Den")
-    er.async_get(hass).async_update_entity(A, area_id=area.id)
+    registry = er.async_get(hass)
+    registry.async_update_entity(A, area_id=area.id)
+    # A sensor in the same area: an input_boolean action does not act on it.
+    sensor = registry.async_get_or_create("sensor", "test", "den_temp")
+    registry.async_update_entity(sensor.entity_id, area_id=area.id)
     await _automation(hass, [_turn_on({"area_id": area.id}), _turn_on({"entity_id": "all"})])
     hass.bus.async_fire("go")
     [run] = await _runs(hass, loaded_entry, freezer)
@@ -157,7 +161,7 @@ async def test_unload_stores_open_runs(hass: HomeAssistant, loaded_entry: MockCo
     [run] = store.data["runs"]
     assert run["source"] == "automation.t1"
     # Its settle window did not pass, so it has no verdict.
-    assert (run["results"], run["verdict"]) == ([], None)
+    assert (run["judged"], run["results"], run["verdict"]) == (False, [], None)
 
 
 async def test_removed_entity_change_records_no_state(
@@ -180,7 +184,7 @@ async def test_closed_run_stores_prior_state_and_verdicts(
     [run] = await _runs(hass, loaded_entry, freezer)
     assert run["calls"][0]["prior"] == {A: {"state": "off", "attributes": {}}}
     assert [(r["entity_id"], r["verdict"]) for r in run["results"]] == [(A, "confirmed")]
-    assert run["verdict"] == "confirmed"
+    assert (run["judged"], run["verdict"]) == (True, "confirmed")
 
 
 async def test_already_on_entity_is_confirmed(
@@ -212,4 +216,4 @@ async def test_run_with_only_a_container_call_has_no_verdict(
     await _automation(hass, [{"action": "script.empty"}])
     hass.bus.async_fire("go")
     [run] = await _runs(hass, loaded_entry, freezer)
-    assert (run["results"], run["verdict"]) == ([], None)
+    assert (run["judged"], run["results"], run["verdict"]) == (True, [], None)

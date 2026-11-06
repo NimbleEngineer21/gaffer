@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-from .models import Check, Comparator, Expectation
+from .models import STATE, Check, Comparator, Expectation
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +50,10 @@ def _parse_check(raw: Any) -> Check:
         value = tuple(value)
     tolerance = _positive_number(raw.get("tolerance", 0), "tolerance", allow_zero=True)
     if comparator is Comparator.APPROX:
-        _positive_number(value, f"check {key!r} value", allow_zero=True)
+        if key == STATE:
+            raise ValueError("approx needs an attribute key; the state is text")
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError(f"check {key!r} value must be a number")
     return Check(key, comparator, value, tolerance)
 
 

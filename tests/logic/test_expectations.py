@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from custom_components.gaffer.logic.expectations import infer, infer_run
+from custom_components.gaffer.logic.expectations import infer, infer_run, own_targets
 from custom_components.gaffer.logic.models import (
     STATE,
     Check,
@@ -106,7 +106,9 @@ def test_volume_set_without_a_number_is_unchecked() -> None:
 
 
 def test_media_player_turn_on_expects_not_off() -> None:
-    assert _checks(_call("media_player", "turn_on")) == (Check(STATE, Comparator.NOT_IN, ("off",)),)
+    assert _checks(_call("media_player", "turn_on")) == (
+        Check(STATE, Comparator.NOT_IN, ("off", "unavailable", "unknown")),
+    )
 
 
 @pytest.mark.parametrize(
@@ -193,3 +195,14 @@ def test_infer_run_numbers_calls_in_order() -> None:
         ("light.x", 1),
         ("lock.x", 2),
     ]
+
+
+def test_window_includes_the_transition() -> None:
+    [exp] = infer(_call("light", "turn_on", {"transition": 10}), 0, _window)
+    assert exp.window == 13.0
+
+
+def test_own_targets_keeps_the_call_domain_only() -> None:
+    area = ("light.a", "sensor.t", "switch.f")
+    assert own_targets("light", area) == ("light.a",)
+    assert own_targets("homeassistant", area) == area

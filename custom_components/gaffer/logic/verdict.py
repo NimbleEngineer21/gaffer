@@ -2,7 +2,9 @@
 
 Each expectation has two checks:
 - the action check, at the call time plus the settle window;
-- the run check, at the time of the last call on the entity plus the window.
+- the run check, at the latest end of any call's window on the same entity.
+
+A window includes any transition that the call asked for.
 
 A run closes only after both times have passed, so the verdict reads values from
 the recorded timeline and needs no timers. The timeline starts with the state the
@@ -90,8 +92,11 @@ def _judge(run: RunRecord, exp: Expectation, all_exps: Sequence[Expectation]) ->
         return ActionResult(exp, Verdict.TARGET_UNAVAILABLE, at_action={STATE: state})
 
     action_t = call.at + exp.window
-    last_call = max(c.at for c in run.calls if entity_id in c.entity_ids)
-    run_t = last_call + exp.window
+    run_t = max(
+        run.calls[other.call_index].at + other.window
+        for other in all_exps
+        if other.entity_id == entity_id
+    )
     own = [c for c in run.changes if c.entity_id == entity_id and c.at >= call.at]
     timeline: Timeline = [(call.at, prior)]
     timeline += sorted(
