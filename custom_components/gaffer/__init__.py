@@ -43,9 +43,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: GafferConfigEntry) -> bo
     outputs = Outputs(hass, store)
     collector = Collector(hass, store, outputs.on_stored)
     entry.runtime_data = RuntimeData(store, collector, outputs)
+    # Forward first: if it raises, no listener or timer is left registered.
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     outputs.async_start()
     collector.async_start()
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
